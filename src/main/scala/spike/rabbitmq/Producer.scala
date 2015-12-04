@@ -1,25 +1,38 @@
 package spike.rabbitmq
 
-import akka.actor.ActorRef
-import com.rabbitmq.client.{Channel, MessageProperties}
-import com.thenewmotion.akka.rabbitmq.{CreateChannel, ChannelActor, ChannelMessage}
+import akka.actor._
+import com.rabbitmq.client.{DefaultConsumer, Channel, MessageProperties}
+import com.thenewmotion.akka.rabbitmq._
+import spike.rabbitmq.ProducerActor.Message
 
-object Producer extends App with SystemActor {
 
-  def setupPublisher(channel: Channel, self: ActorRef) {
-    channel.exchangeDeclare(exchange, "fanout", durable)
-  }
+object Producer extends AppConfiguration with App {
 
-  connection ! CreateChannel(ChannelActor.props(setupPublisher), Some("publisher"))
+  import MessageProperties._
+
+  val system = ActorSystem()
+
+  val connManager: ActorRef = system.actorOf(ConnectionActor.props(factory), "rabbitmq")
+
+  connManager ! CreateChannel(
+    ChannelActor.props({ (c, ref) => c.exchangeDeclare(exchange, fanout, durable) }),
+    Some("publisher")
+  )
   val publisher = system.actorSelection("/user/rabbitmq/publisher")
-  val msgs = Range(1, Int.MaxValue)
-  msgs.foreach(e => {
+
+  val producer = system.actorOf(
+    ProducerActor.props(
+    publisher, { s => ChannelMessage(_.basicPublish(exchange, emptyRoutingKey, PERSISTENT_TEXT_PLAIN, toBytes(s)), false) }
+    ))
+
+  private def toBytes(m: String) = m.getBytes("UTF-8")
+
+  Range(1, Int.MaxValue).foreach(e => {
     println(s"Sending the event: $e")
-    publisher ! ChannelMessage(_.basicPublish(exchange, "", MessageProperties.PERSISTENT_TEXT_PLAIN, toBytes(e)), dropIfNoChannel = false)
+    producer ! Message(e.toString)
     Thread.sleep(1000)
   }
   )
-
-  def toBytes(x: Long) = x.toString.getBytes("UTF-8")
-
 }
+
+
